@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Char exposing (isUpper, isLower)
 import Debug
+import Dict exposing (Dict)
 import Html exposing (Attribute, Html, button, div, input, span, text, textarea)
 import Html.Attributes exposing (style)
 import Html.Events exposing (onClick, onInput)
@@ -18,38 +19,69 @@ type Expr =
   | Lam Name Expr
   | Lit Lit
 
+type DeBruijn =
+    DVar Int
+  | DApp DeBruijn DeBruijn
+  | DLam DeBruijn
+  | DLit Lit
+
+-- \x . (\y . (\z . x z (y z)))    map []                  depth 0
+-- \. (\y . (\z . x z (y z)))      map [(x:0)]             depth 1
+-- \. (\. (\z. x z (y z)))         map [(x:0),(y:1)]       depth 2
+-- \. (\. (\. x z (y z)))          map [(x:0),(y:1),(z:2)] depth 3
+-- \. (\. (\. 3 1 (2 1)))          replace each var with depth - map(var)
+
+(<$>) : (a -> b) -> Maybe a -> Maybe b
+(<$>) f m = case m of
+  Just x  -> Just (f x)
+  Nothing -> Nothing
+
+infixl 4 <*>
+(<*>) : Maybe (a -> b) -> Maybe a -> Maybe b
+(<*>) mf ma = case mf of
+  Just f  -> f <$> ma
+  Nothing -> Nothing
+
+toDeBruijn : Int -> Dict Name Int -> Expr -> Maybe DeBruijn
+toDeBruijn depth dict e = case e of
+  Var n     -> 
+    case Dict.get n dict of 
+      Just ix -> Just (DVar (depth - ix))
+      Nothing -> Just (DVar 99)
+  App e1 e2 -> DApp <$> toDeBruijn depth dict e1 <*> toDeBruijn depth dict e2
+  Lam n  ex -> DLam <$> toDeBruijn (depth + 1) (Dict.insert n depth dict) ex
+  Lit x     -> Just (DLit x)
+
 spaces : Parser ()
 spaces =
   ignore zeroOrMore (\char -> char == ' ')
 
-i : Expr
-i = Lam "x" (Var "x")
+i : DeBruijn
+i = DLam (DVar 1)
 
-k : Expr
-k = Lam "x" (Lam "y" (Var "x"))
+k : DeBruijn
+k = DLam (DLam (DVar 2))
 
-s : Expr
-s = Lam "x"
-      (Lam "y"
-        (Lam "z"
-          (App (App (Var "x") (Var "z"))
-               (App (Var "y") (Var "z")))))
+s : DeBruijn
+s = DLam (DLam (DLam
+  (DApp (DApp (DVar 3) (DVar 1))
+        (DApp (DVar 2) (DVar 1)))))
 
 type Lit =
     LInt Int
   | LBool Bool
 
-scomb : Parser Expr
+scomb : Parser DeBruijn
 scomb =
   succeed s
     |. keyword "S"
 
-kcomb : Parser Expr
+kcomb : Parser DeBruijn
 kcomb =
   succeed k
     |. keyword "K"
 
-icomb : Parser Expr
+icomb : Parser DeBruijn
 icomb =
   succeed i
     |. keyword "I"
@@ -69,11 +101,13 @@ lint =
   succeed LInt
     |= int
 
-prim : Parser Expr
+{-#
+prim : Parser DeBruijn
 prim =
   succeed identity
     |= oneOf [scomb, kcomb, icomb]
     |. spaces
+#-}
 
 lit : Parser Expr
 lit =
@@ -98,7 +132,6 @@ parens p =
 term : Parser Expr
 term = oneOf
   [ parens (lazy (\_ -> expr))
-  , prim
   , lit
   , var
   , lazy (\_ -> lam)
@@ -138,6 +171,15 @@ showExpr ex = case ex of
   Lam name ex      -> "(λ" ++ name ++ " . " ++ showExpr ex ++ ")"
   Lit (LInt n)     -> toString n
   Lit (LBool b)    -> toString b
+
+showDeBruijn : DeBruijn -> String
+showDeBruijn ex = case ex of
+  DVar ix           -> toString ix
+  DApp e (DApp a b) -> showDeBruijn e ++ " (" ++ showDeBruijn a ++ " " ++ showDeBruijn b ++ ")"
+  DApp a b          -> showDeBruijn a ++ " " ++ showDeBruijn b
+  DLam e            -> "(λ " ++ showDeBruijn e ++ ")"
+  DLit (LInt n)     -> toString n
+  DLit (LBool b)    -> toString b
 
 asColor : Int -> String
 asColor n = case colors !! (n % 6) of
@@ -200,6 +242,33 @@ betaReduce ex = case ex of
   (Lam x (App y z))        -> Lam x (betaReduce (App y z))
   x                        -> x
 
+promoteFreeVars : Int -> Int -> DeBruijn -> DeBruijn
+promoteFreeVars amt depth ex = case ex of
+  DVar n   -> if n > depth then DVar (n + amt) else DVar n
+  DLam e   -> DLam (promoteFreeVars amt (depth+1) e)
+  DApp a b -> DApp (promoteFreeVars amt depth a) (promoteFreeVars amt depth b)
+  x        -> x
+
+replace : Int -> DeBruijn -> DeBruijn -> DeBruijn
+replace depth body new = case body of
+  DLit l   -> DLit l
+  DLam ex  -> DLam (replace (depth+1) ex new)
+  DApp a b -> DApp (replace depth a new) (replace depth b new)
+  DVar n   ->
+    if n == depth then
+      promoteFreeVars depth 0 new
+    else if n > depth then
+      DVar (n - 1)
+    else
+      DVar n
+
+deBruijnBeta : Int -> DeBruijn -> DeBruijn
+deBruijnBeta depth e = case e of
+  DApp (DLam body) ex -> replace depth body ex
+  DApp a b -> DApp (deBruijnBeta depth a) (deBruijnBeta depth b)
+  DLam body -> DLam (deBruijnBeta (depth+1) body)
+  x -> x
+
 {-#
 SS              =  (λx . (λy . (λz . x z (y z))))   (λx . (λy . (λz . x z (y z))))
   {beta reduce} -> (λy . (λz . (λx1 . (λy . (λz . x1 z (y z)))) z (y z)))
@@ -258,8 +327,16 @@ eval n ex =
   else
     ex :: eval (n+1) newEx
 
+evalDB : Int -> DeBruijn -> List DeBruijn
+evalDB n ex =
+  let newEx = deBruijnBeta 0 ex in
+  if n > 20 then
+    [ex]
+  else
+    ex :: evalDB (n+1) newEx
+
 type alias Model = {
-    history : List Expr,
+    history : List DeBruijn,
     userInput : String
 }
 
@@ -268,11 +345,9 @@ type Msg = Submit | Input String
 initModel : Model
 initModel = { userInput = "", history = [] }
 
-mkLine : Expr -> Html msg
+mkLine : DeBruijn -> Html msg
 mkLine ex = div []
-    [ renderExpr 0 ex
-    , text " | "
-    , text (showSet (freeVars ex))
+    [ text (showDeBruijn ex)
     ]
 
 view : Model -> Html Msg
@@ -288,9 +363,11 @@ parseAppend p str hist = case run p str of
   Ok ex -> ex :: hist
   Err _ -> hist
 
-parseEval : Parser Expr -> String -> List Expr
+parseEval : Parser Expr -> String -> List DeBruijn
 parseEval p str = case run p str of
-  Ok ex -> eval 0 ex
+  Ok ex -> (case toDeBruijn 0 Dict.empty ex of
+             Just e  -> evalDB 0 e
+             Nothing -> [])
   Err _ -> []
 
 update : Msg -> Model -> Model
