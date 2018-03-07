@@ -25,12 +25,6 @@ type DeBruijn =
   | DLam DeBruijn
   | DLit Lit
 
--- \x . (\y . (\z . x z (y z)))    map []                  depth 0
--- \. (\y . (\z . x z (y z)))      map [(x:0)]             depth 1
--- \. (\. (\z. x z (y z)))         map [(x:0),(y:1)]       depth 2
--- \. (\. (\. x z (y z)))          map [(x:0),(y:1),(z:2)] depth 3
--- \. (\. (\. 3 1 (2 1)))          replace each var with depth - map(var)
-
 (<$>) : (a -> b) -> Maybe a -> Maybe b
 (<$>) f m = case m of
   Just x  -> Just (f x)
@@ -46,26 +40,66 @@ toDeBruijn : Int -> Dict Name Int -> Expr -> Maybe DeBruijn
 toDeBruijn depth dict e = case e of
   Var n     -> 
     case Dict.get n dict of 
-      Just ix -> Just (DVar (depth - ix))
+      Just ix -> Just (DVar (depth - ix - 1))
       Nothing -> Just (DVar 99)
   App e1 e2 -> DApp <$> toDeBruijn depth dict e1 <*> toDeBruijn depth dict e2
   Lam n  ex -> DLam <$> toDeBruijn (depth + 1) (Dict.insert n depth dict) ex
   Lit x     -> Just (DLit x)
+
+mkNewName : List Name -> Name
+mkNewName xs = case List.length xs of
+  0 -> "x"
+  1 -> "y"
+  2 -> "z"
+  3 -> "a"
+  4 -> "b"
+  5 -> "c"
+  x -> "AAAAA"
+
+toExpr : List Name -> DeBruijn -> Expr
+toExpr ctx e = case e of
+  DVar n -> case ctx !! n of
+    Just name -> Var name
+    Nothing   -> let newName = mkNewName ctx in
+      Var newName
+  DApp a b -> App (toExpr ctx a) (toExpr ctx b)
+  DLam x -> let newName = mkNewName ctx in
+    Lam newName (toExpr (newName::ctx) x)
+  DLit l   -> Lit l
 
 spaces : Parser ()
 spaces =
   ignore zeroOrMore (\char -> char == ' ')
 
 i : DeBruijn
-i = DLam (DVar 1)
+i = DLam (DVar 0)
 
 k : DeBruijn
-k = DLam (DLam (DVar 2))
+k = DLam (DLam (DVar 1))
 
 s : DeBruijn
 s = DLam (DLam (DLam
-  (DApp (DApp (DVar 3) (DVar 1))
-        (DApp (DVar 2) (DVar 1)))))
+  (DApp (DApp (DVar 2) (DVar 0))
+        (DApp (DVar 1) (DVar 0)))))
+
+s1 = toExpr [] s
+
+o : DeBruijn
+o = DLam (DApp (DVar 0) (DVar 0))
+
+y : DeBruijn
+y = DLam (DApp (DLam (DApp (DVar 1) (DApp (DVar 0) (DVar 0))))
+               (DLam (DApp (DVar 1) (DApp (DVar 0) (DVar 0)))))
+
+y1 : Expr
+y1 = Lam "x" (App (Lam "y" (App (Var "x") (App (Var "y") (Var "y"))))
+                  (Lam "y" (App (Var "x") (App (Var "y") (Var "y")))))
+
+x : DeBruijn
+x = DLam (DApp o (DLam (DApp (DVar 1) (DApp (DVar 0) (DVar 0)))))
+
+iota : DeBruijn
+iota = DLam (DApp (DApp (DVar 0) s) k)
 
 type Lit =
     LInt Int
@@ -86,6 +120,13 @@ icomb =
   succeed i
     |. keyword "I"
 
+yc : Parser Expr
+yc =
+  succeed y1
+    |. keyword "Y"
+
+sc = succeed s1 |. keyword "S"
+
 ltrue : Parser Lit
 ltrue =
   succeed (LBool True)
@@ -101,13 +142,13 @@ lint =
   succeed LInt
     |= int
 
-{-#
+{-
 prim : Parser DeBruijn
 prim =
   succeed identity
     |= oneOf [scomb, kcomb, icomb]
     |. spaces
-#-}
+-}
 
 lit : Parser Expr
 lit =
@@ -175,7 +216,7 @@ showExpr ex = case ex of
 showDeBruijn : DeBruijn -> String
 showDeBruijn ex = case ex of
   DVar ix           -> toString ix
-  DApp e (DApp a b) -> showDeBruijn e ++ " (" ++ showDeBruijn a ++ " " ++ showDeBruijn b ++ ")"
+  DApp e (DApp a b) -> showDeBruijn e ++ " (" ++ showDeBruijn (DApp a b) ++ ")"
   DApp a b          -> showDeBruijn a ++ " " ++ showDeBruijn b
   DLam e            -> "(λ " ++ showDeBruijn e ++ ")"
   DLit (LInt n)     -> toString n
@@ -225,89 +266,26 @@ renderExpr level ex = case ex of
   Lit (LInt  n) -> text (toString n)
   Lit (LBool b) -> text (toString b)
 
-showSet : Set Name -> String
-showSet s = Set.foldr (\a b -> a ++ " " ++ b) "" s
-
-freeVars : Expr -> Set Name
-freeVars e = case e of
-  Lit _   -> Set.empty
-  Var n   -> Set.singleton n
-  App a b -> Set.union (freeVars a) (freeVars b)
-  Lam n x -> Set.diff  (freeVars x) (Set.singleton n)
-
-betaReduce : Expr -> Expr
-betaReduce ex = case ex of
-  (App (Lam var body) ex1) -> substSafe var ex1 body
-  (App x y)                -> App (betaReduce x) (betaReduce y)
-  (Lam x (App y z))        -> Lam x (betaReduce (App y z))
-  x                        -> x
-
-promoteFreeVars : Int -> Int -> DeBruijn -> DeBruijn
-promoteFreeVars amt depth ex = case ex of
-  DVar n   -> if n > depth then DVar (n + amt) else DVar n
-  DLam e   -> DLam (promoteFreeVars amt (depth+1) e)
-  DApp a b -> DApp (promoteFreeVars amt depth a) (promoteFreeVars amt depth b)
-  x        -> x
-
-replace : Int -> DeBruijn -> DeBruijn -> DeBruijn
-replace depth body new = case body of
+shift : Int -> Int -> DeBruijn -> DeBruijn
+shift d cutoff term = case term of
+  DVar k   -> DVar (if k >= cutoff then k + d else k)
+  DLam t   -> DLam (shift d (cutoff+1) t)
+  DApp t u -> DApp (shift d cutoff t) (shift d cutoff u)
   DLit l   -> DLit l
-  DLam ex  -> DLam (replace (depth+1) ex new)
-  DApp a b -> DApp (replace depth a new) (replace depth b new)
-  DVar n   ->
-    if n == depth then
-      promoteFreeVars depth 0 new
-    else if n > depth then
-      DVar (n - 1)
-    else
-      DVar n
 
-deBruijnBeta : Int -> DeBruijn -> DeBruijn
-deBruijnBeta depth e = case e of
-  DApp (DLam body) ex -> replace depth body ex
-  DApp a b -> DApp (deBruijnBeta depth a) (deBruijnBeta depth b)
-  DLam body -> DLam (deBruijnBeta (depth+1) body)
+substitute : DeBruijn -> Int -> DeBruijn -> DeBruijn
+substitute tgt j src = case tgt of
+  DVar k   -> if k == j then src else tgt
+  DLam t   -> DLam (substitute t (j+1) (shift 1 0 src))
+  DApp t u -> DApp (substitute t j src) (substitute u j src)
+  DLit l   -> DLit l
+
+deBruijnBeta : DeBruijn -> DeBruijn
+deBruijnBeta e = case e of
+  DApp (DLam body) ex -> shift (-1) 0 (substitute body 0 (shift 1 0 ex))
+  DApp a b  -> DApp (deBruijnBeta a) (deBruijnBeta b)
+  DLam body -> DLam (deBruijnBeta body)
   x -> x
-
-{-#
-SS              =  (λx . (λy . (λz . x z (y z))))   (λx . (λy . (λz . x z (y z))))
-  {beta reduce} -> (λy . (λz . (λx1 . (λy . (λz . x1 z (y z)))) z (y z)))
-                     ^     ^            ^     ^
-                                        |_____|_ These need to be renamed when substituted
-#-}
-
--- Generate an alpha-equivalent expression that contains none of the names in
--- the input set
-makeUnique : Set Name -> Expr -> Expr
-makeUnique s e = case e of
-  App a b -> App (makeUnique s a) (makeUnique s b)
-  Lam n x ->
-    if Set.member n s then
-      Lam (n ++ "1") (makeUnique s x)
-    else
-      Lam n (makeUnique s x)
-  Var x   ->
-    if Set.member x s then
-      Var (x ++ "1")
-    else
-      Var x
-  x       -> x
-
-substSafe : Name -> Expr -> Expr -> Expr
-substSafe var new e =
-  let fv = freeVars e in
-  if Set.isEmpty fv then
-    subst var new e
-  else
-    subst var (makeUnique fv new) e
-
--- FIXME: perform renaming to avoid variable capture
-subst : Name -> Expr -> Expr -> Expr
-subst var new e = case e of
-  Var name    -> if name == var then new else Var name
-  App ex1 ex2 -> App (subst var new ex1) (subst var new ex2)
-  Lam name ex -> Lam name (subst var new ex)
-  Lit l       -> Lit l
 
 equivalent : Expr -> Expr -> Bool
 equivalent x y = case (x, y) of
@@ -318,18 +296,9 @@ equivalent x y = case (x, y) of
   (App a x,       App b y)       -> equivalent a b && equivalent x y
   (_,             _)             -> False
 
--- FIXME: doesn't catch cycles with period > 1
-eval : Int -> Expr -> List Expr
-eval n ex =
-  let newEx = betaReduce ex in
-  if n > 20 then
-    [ex]
-  else
-    ex :: eval (n+1) newEx
-
 evalDB : Int -> DeBruijn -> List DeBruijn
 evalDB n ex =
-  let newEx = deBruijnBeta 0 ex in
+  let newEx = deBruijnBeta ex in
   if n > 20 then
     [ex]
   else
@@ -347,12 +316,12 @@ initModel = { userInput = "", history = [] }
 
 mkLine : DeBruijn -> Html msg
 mkLine ex = div []
-    [ text (showDeBruijn ex)
+    [ text (showDeBruijn ex) -- renderExpr 0 (toExpr [] ex)
     ]
 
 view : Model -> Html Msg
 view model =
-  div [style [("background-color", "black")]]
+  div [style [("background-color", "black"), ("color", "white")]]
     [ div [] (List.map mkLine model.history)
     , input [onInput Input] []
     , button [onClick Submit] [text "Submit"]
@@ -367,7 +336,7 @@ parseEval : Parser Expr -> String -> List DeBruijn
 parseEval p str = case run p str of
   Ok ex -> (case toDeBruijn 0 Dict.empty ex of
              Just e  -> evalDB 0 e
-             Nothing -> [])
+             Nothing -> [DVar 666])
   Err _ -> []
 
 update : Msg -> Model -> Model
