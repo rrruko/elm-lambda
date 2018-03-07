@@ -287,25 +287,31 @@ deBruijnBeta e = case e of
   DLam body -> DLam (deBruijnBeta body)
   x -> x
 
-equivalent : Expr -> Expr -> Bool
+equivalent : DeBruijn -> DeBruijn -> Bool
 equivalent x y = case (x, y) of
-  (Lit (LInt l),  Lit (LInt r))  -> l == r
-  (Lit (LBool l), Lit (LBool r)) -> l == r
-  (Lam v1 ex1,    Lam v2 ex2)    -> v1 == v2 && equivalent ex1 ex2
-  (Var a,         Var b)         -> a == b
-  (App a x,       App b y)       -> equivalent a b && equivalent x y
-  (_,             _)             -> False
+  (DLit (LInt l),  DLit (LInt r))  -> l == r
+  (DLit (LBool l), DLit (LBool r)) -> l == r
+  (DLam ex1,       DLam ex2)       -> equivalent ex1 ex2
+  (DVar a,         DVar b)         -> a == b
+  (DApp a x,       DApp b y)       -> equivalent a b && equivalent x y
+  (_,              _)              -> False
 
-evalDB : Int -> DeBruijn -> List DeBruijn
+type Step a = Initial a | Intermediate a | Finished String a
+
+evalDB : Int -> DeBruijn -> List (Step DeBruijn)
 evalDB n ex =
   let newEx = deBruijnBeta ex in
-  if n > 20 then
-    [ex]
+  if equivalent ex newEx then
+    [Finished "Reached normal form." ex]
+  else if n > 20 then
+    [Finished "Ran out of time." ex]
+  else if n == 0 then
+    Initial ex :: evalDB (n+1) newEx
   else
-    ex :: evalDB (n+1) newEx
+    Intermediate ex :: evalDB (n+1) newEx
 
 type alias Model = {
-    history : List DeBruijn,
+    history : List (Step DeBruijn),
     userInput : String
 }
 
@@ -314,9 +320,15 @@ type Msg = Submit | Input String
 initModel : Model
 initModel = { userInput = "", history = [] }
 
-mkLine : DeBruijn -> Html msg
-mkLine ex = div []
-    [ text (showDeBruijn ex) -- renderExpr 0 (toExpr [] ex)
+mkLine : Step DeBruijn -> Html msg
+mkLine ex = 
+    let (e, prefix) = case ex of
+      Intermediate e -> (e, " ... ")
+      Initial e -> (e, "")
+      Finished reason e -> (e, reason ++ " | ")
+    in div []
+    [ text prefix
+    , renderExpr 0 (toExpr [] e)
     ]
 
 view : Model -> Html Msg
@@ -332,11 +344,11 @@ parseAppend p str hist = case run p str of
   Ok ex -> ex :: hist
   Err _ -> hist
 
-parseEval : Parser Expr -> String -> List DeBruijn
+parseEval : Parser Expr -> String -> List (Step DeBruijn)
 parseEval p str = case run p str of
   Ok ex -> (case toDeBruijn 0 Dict.empty ex of
              Just e  -> evalDB 0 e
-             Nothing -> [DVar 666])
+             Nothing -> [Initial (DVar 666)])
   Err _ -> []
 
 update : Msg -> Model -> Model
