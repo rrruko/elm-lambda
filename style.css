@@ -1,0 +1,18 @@
+body {
+  background-color: black;
+}
+
+.output {
+  background-color: #111;
+  border: solid white;
+  border-radius: 0.5em;
+  margin: 2em;
+  padding: 1em;
+  font-family: Roboto;
+  color: white;
+}
+
+input {
+  width: 50%;
+  margin-left: 3em;
+}
