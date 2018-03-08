@@ -3,8 +3,8 @@ module Main exposing (main)
 import Char exposing (isUpper, isLower)
 import Debug
 import Dict exposing (Dict)
-import Html exposing (Attribute, Html, button, div, input, span, text, textarea)
-import Html.Attributes exposing (style)
+import Html exposing (Attribute, Html, br, button, div, input, li, p, span, text, textarea, ul)
+import Html.Attributes exposing (class, style)
 import Html.Events exposing (onClick, onInput)
 import List.Extra exposing ((!!), foldl1)
 import Parser exposing (Parser, (|.), (|=), ignore, int, keep, keyword, lazy, map,
@@ -331,10 +331,24 @@ mkLine ex =
     , renderExpr 0 (toExpr [] e)
     ]
 
+welcome : List (Html msg)
+welcome =
+  [ p [] [text "Enter a lambda calc expression, like one of these:"]
+  , ul []
+      [ li [] [text "(\\x. \\y. x)"]
+      , li [] [text "(\\f. (\\x. f (x x)) (\\x. f (x x)))"]
+      , li [] [text "(\\f. f (\\x. \\y. \\z. x z (y z)) (\\x. \\y. x)) (\\f. f (\\x. \\y. \\z. x z (y z)) (\\x. \\y. x))"]
+      ]
+  ]
+
 view : Model -> Html Msg
 view model =
-  div [style [("background-color", "black"), ("color", "white")]]
-    [ div [] (List.map mkLine model.history)
+  div []
+    [ div [class "output"]
+        (if List.isEmpty model.history then
+          welcome
+        else
+          List.map mkLine model.history)
     , input [onInput Input] []
     , button [onClick Submit] [text "Submit"]
     ]
