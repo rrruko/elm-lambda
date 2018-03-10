@@ -99,9 +99,10 @@ term = oneOf
   [ prim
   , lit
   , var
---  , parens (lazy (\_ -> expr))
---  , lazy (\_ -> lam)
+  , parens (lazy (\_ -> expr))
+  , lazy (\_ -> lam)
   ] |. spaces
+
 
 name : Parser Name
 name =
@@ -110,7 +111,7 @@ name =
 expr : Parser Expr
 expr =
   succeed app
-    |= repeat oneOrMore term
+    |= repeat oneOrMore (lazy (\_ -> term))
 
 lam : Parser Expr
 lam =
@@ -121,5 +122,5 @@ lam =
     |. spaces
     |. oneOf [symbol ".", symbol "->"]
     |. spaces
-    |= expr
+    |= lazy (\_ -> expr)
     |. spaces
