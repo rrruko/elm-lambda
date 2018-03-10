@@ -130,14 +130,6 @@ update msg model = case msg of
                        userInput = "" }
   Input s -> { model | userInput = s }
 
-{-
-type alias Model = Int
-type alias Msg = Never
-initModel = 0
-view m = text "it works"
-update msg m = m
--}
-
 main : Program Never Model Msg
 main = Html.beginnerProgram
   { model  = initModel
