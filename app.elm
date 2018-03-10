@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Char exposing (isUpper, isLower)
+import Char exposing (fromCode, isUpper, isLower, toCode)
 import Debug
 import Dict exposing (Dict)
 import Html exposing (Attribute, Html, br, button, div, input, li, p, span, text, textarea, ul)
@@ -12,6 +12,8 @@ import Parser exposing (Parser, (|.), (|=), ignore, int, keep, keyword, lazy, ma
 import Set exposing (Set)
 
 type alias Name = String
+
+-- Y (\f. \n. iszero n (\g.\x.g x) (times n (f (pred n)))) (\g. \x. g (g (g x)))
 
 type Expr =
     Var Name
@@ -46,24 +48,29 @@ toDeBruijn depth dict e = case e of
   Lam n  ex -> DLam <$> toDeBruijn (depth + 1) (Dict.insert n depth dict) ex
   Lit x     -> Just (DLit x)
 
-mkNewName : List Name -> Name
-mkNewName xs = case List.length xs of
-  0 -> "x"
-  1 -> "y"
-  2 -> "z"
-  3 -> "a"
-  4 -> "b"
-  5 -> "c"
-  x -> "AAAAA"
+genName : Int -> Name
+genName n =
+  let name = fromCode ((n % 26) + toCode 'a') in
+  if n < 26 then
+    String.fromChar name
+  else
+    String.cons name (genName (n // 26))
+
+mkNewName : Int -> Name
+mkNewName n =
+  if n < 26 then
+    String.fromChar (fromJust (String.toList "xyzuvwabcdefghijklmnopqrst" !! n))
+  else
+    genName n
 
 toExpr : List Name -> DeBruijn -> Expr
 toExpr ctx e = case e of
   DVar n -> case ctx !! n of
     Just name -> Var name
-    Nothing   -> let newName = mkNewName ctx in
+    Nothing   -> let newName = mkNewName (List.length ctx) in
       Var newName
   DApp a b -> App (toExpr ctx a) (toExpr ctx b)
-  DLam x -> let newName = mkNewName ctx in
+  DLam x -> let newName = mkNewName (List.length ctx) in
     Lam newName (toExpr (newName::ctx) x)
   DLit l   -> Lit l
 
@@ -82,8 +89,6 @@ s = DLam (DLam (DLam
   (DApp (DApp (DVar 2) (DVar 0))
         (DApp (DVar 1) (DVar 0)))))
 
-s1 = toExpr [] s
-
 o : DeBruijn
 o = DLam (DApp (DVar 0) (DVar 0))
 
@@ -91,15 +96,36 @@ y : DeBruijn
 y = DLam (DApp (DLam (DApp (DVar 1) (DApp (DVar 0) (DVar 0))))
                (DLam (DApp (DVar 1) (DApp (DVar 0) (DVar 0)))))
 
-y1 : Expr
-y1 = Lam "x" (App (Lam "y" (App (Var "x") (App (Var "y") (Var "y"))))
-                  (Lam "y" (App (Var "x") (App (Var "y") (Var "y")))))
-
 x : DeBruijn
 x = DLam (DApp o (DLam (DApp (DVar 1) (DApp (DVar 0) (DVar 0)))))
 
 iota : DeBruijn
 iota = DLam (DApp (DApp (DVar 0) s) k)
+
+pred : Expr
+pred = 
+  let b = Lam "g" (Lam "h" (App (Var "h") (App (Var "g") (Var "f")))) in
+  let c = Lam "u" (Var "x") in
+  let d = Lam "u" (Var "u") in
+  Lam "n" (Lam "f" (Lam "x" (App (App (App (Var "n") b) c) d)))
+
+lamfalse : Expr
+lamfalse = Lam "a" (Lam "b" (Var "b"))
+
+lamtrue : Expr
+lamtrue = Lam "a" (Lam "b" (Var "a"))
+
+iszero : Expr
+iszero = Lam "n" (App (App (Var "n") (Lam "x" lamfalse)) lamtrue)
+
+times : Expr
+times = Lam "m" (Lam "n" (Lam "f" (App (Var "m") (App (Var "n") (Var "f")))))
+
+factorial : String
+factorial = "Y (\\f. \\n. iszero n (\\g.\\x.g x) (times n (f (pred n)))) (\\g. \\x. g (g (g x)))"
+
+app : List Expr -> Expr
+app = fromJust << foldl1 App
 
 type Lit =
     LInt Int
@@ -120,12 +146,25 @@ icomb =
   succeed i
     |. keyword "I"
 
-yc : Parser Expr
-yc =
-  succeed y1
+ycomb : Parser DeBruijn
+ycomb = 
+  succeed y
     |. keyword "Y"
 
-sc = succeed s1 |. keyword "S"
+parsepred : Parser DeBruijn
+parsepred =
+  succeed (fromJust <| toDeBruijn 0 Dict.empty pred)
+    |. keyword "pred"
+
+parseiszero : Parser DeBruijn
+parseiszero = 
+  succeed (fromJust <| toDeBruijn 0 Dict.empty iszero)
+    |. keyword "iszero"
+
+parsetimes : Parser DeBruijn
+parsetimes =
+  succeed (fromJust <| toDeBruijn 0 Dict.empty times)
+    |. keyword "times"
 
 ltrue : Parser Lit
 ltrue =
@@ -142,13 +181,11 @@ lint =
   succeed LInt
     |= int
 
-{-
 prim : Parser DeBruijn
 prim =
   succeed identity
-    |= oneOf [scomb, kcomb, icomb]
+    |= oneOf [scomb, kcomb, icomb, ycomb, parsepred, parseiszero, parsetimes]
     |. spaces
--}
 
 lit : Parser Expr
 lit =
@@ -173,6 +210,8 @@ parens p =
 term : Parser Expr
 term = oneOf
   [ parens (lazy (\_ -> expr))
+  , succeed (toExpr [] iota) |. keyword "iota"
+  , map (\db -> toExpr [] db) prim
   , lit
   , var
   , lazy (\_ -> lam)
@@ -207,7 +246,7 @@ lam =
 showExpr : Expr -> String
 showExpr ex = case ex of
   Var name         -> name
-  App ex (App a b) -> showExpr ex ++ " (" ++ showExpr a ++ " " ++ showExpr b ++ ")"
+  App ex (App a b) -> showExpr ex ++ " (" ++ showExpr (App a b) ++ ")"
   App ex1 ex2      -> showExpr ex1 ++ " " ++ showExpr ex2
   Lam name ex      -> "(λ" ++ name ++ " . " ++ showExpr ex ++ ")"
   Lit (LInt n)     -> toString n
@@ -246,9 +285,7 @@ renderExpr level ex = case ex of
   App e (App a b)  -> span [styleColorLv level]
     [ renderExpr level e
     , text " ("
-    , renderExpr (level+1) a
-    , text " "
-    , renderExpr (level+1) b
+    , renderExpr (level+1) (App a b)
     , text ")"
     ]
   App a b -> span [styleColorLv level]
@@ -303,7 +340,7 @@ evalDB n ex =
   let newEx = deBruijnBeta ex in
   if equivalent ex newEx then
     [Finished "Reached normal form." ex]
-  else if n > 20 then
+  else if n > 200 then
     [Finished "Ran out of time." ex]
   else if n == 0 then
     Initial ex :: evalDB (n+1) newEx
@@ -333,13 +370,25 @@ mkLine ex =
 
 welcome : List (Html msg)
 welcome =
-  [ p [] [text "Enter a lambda calc expression, like one of these:"]
+  [ p [] 
+      [ text "This is a lambda calculus interpreter. "
+      , text "It takes lambda calculus expressions and beta-reduces them. "
+      , text "It understands the S, K, I, and Y combinators, and iota. "
+      ]
   , ul []
       [ li [] [text "(\\x. \\y. x)"]
       , li [] [text "(\\f. (\\x. f (x x)) (\\x. f (x x)))"]
       , li [] [text "(\\f. f (\\x. \\y. \\z. x z (y z)) (\\x. \\y. x)) (\\f. f (\\x. \\y. \\z. x z (y z)) (\\x. \\y. x))"]
+      , li [] [text "iota iota"]
+      , li [] [text "S K K"]
       ]
   ]
+
+last : List a -> a
+last xs = case xs of
+  []       -> Debug.crash "rip"
+  x :: []  -> x
+  x :: s   -> last s
 
 view : Model -> Html Msg
 view model =
@@ -348,7 +397,7 @@ view model =
         (if List.isEmpty model.history then
           welcome
         else
-          List.map mkLine model.history)
+          [mkLine (last model.history)])
     , input [onInput Input] []
     , button [onClick Submit] [text "Submit"]
     ]
