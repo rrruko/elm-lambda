@@ -1,10 +1,16 @@
-module Eval exposing (Step(..), parseEval)
+module Eval exposing (Step(..), parseEval, unstep)
 
 import Dict exposing (Dict)
 import Lambda exposing (DeBruijn(..), Expr(..), deBruijnBeta, equivalent, toDeBruijn)
 import Parser exposing (Parser, run)
 
 type Step a = Initial a | Intermediate a | Finished String a
+
+unstep : Step DeBruijn -> DeBruijn
+unstep ex = case ex of
+  Intermediate e    -> e
+  Initial e         -> e
+  Finished reason e -> e
 
 evalDB : Int -> DeBruijn -> List (Step DeBruijn)
 evalDB n ex =

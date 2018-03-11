@@ -111,17 +111,23 @@ initModel = { userInput = "", history = [], showDeBruijn = False }
 
 mkLine : Step DeBruijn -> Bool -> Html msg
 mkLine ex showDeBruijn =
-    let (e, prefix) = case ex of
-      Intermediate e -> (e, " ... ")
-      Initial e -> (e, "")
-      Finished reason e -> (e, reason ++ " | ")
-    in div []
-    [ text prefix
-    , if showDeBruijn then
-        renderDeBruijn 0 e
-      else
-        renderExpr 0 (toExpr [] e)
-    ]
+  let exprSpan =
+        if showDeBruijn then
+          renderDeBruijn 0 (unstep ex)
+        else
+          renderExpr 0 (toExpr [] (unstep ex))
+  in  case ex of
+        Intermediate e -> div [] [indent exprSpan]
+        Initial e -> div [] [exprSpan]
+        Finished reason e ->
+          div [] [indent (span []
+            [ exprSpan
+            , text " | "
+            , text reason
+            ])]
+
+indent : Html msg -> Html msg
+indent html = span [] [text "-> ", html]
 
 welcome : List (Html msg)
 welcome =
