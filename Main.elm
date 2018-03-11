@@ -1,45 +1,48 @@
 module Main exposing (main)
 
 import Html exposing (..)
-import Html.Attributes exposing (class, style)
+import Html.Attributes exposing (class, style, id, type_)
 import Html.Events exposing (onClick, onInput)
 import List.Extra exposing ((!!))
 
+import Common exposing (last)
 import Lambda exposing (..)
 import ParseLambda exposing (..)
 import Eval exposing (..)
 
-showExpr : Expr -> String
-showExpr ex = case ex of
-  Var name         -> name
-  App ex (App a b) -> showExpr ex ++ " (" ++ showExpr (App a b) ++ ")"
-  App ex1 ex2      -> showExpr ex1 ++ " " ++ showExpr ex2
-  Lam name ex      -> "(λ" ++ name ++ " . " ++ showExpr ex ++ ")"
-  Lit (LInt n)     -> toString n
-  Lit (LBool b)    -> toString b
-
-showDeBruijn : DeBruijn -> String
-showDeBruijn ex = case ex of
-  DVar ix           -> toString ix
-  DApp e (DApp a b) -> showDeBruijn e ++ " (" ++ showDeBruijn (DApp a b) ++ ")"
-  DApp a b          -> showDeBruijn a ++ " " ++ showDeBruijn b
-  DLam e            -> "(λ " ++ showDeBruijn e ++ ")"
-  DLit (LInt n)     -> toString n
-  DLit (LBool b)    -> toString b
-
 asColor : Int -> String
 asColor n = case colors !! (n % 6) of
   Just s  -> s
-  Nothing -> "rgb(0,0,0)"
+  Nothing -> mkCssRgb (mkRgb 0 0 0)
+
+clamp : Int -> Int -> Int -> Int
+clamp lo hi t = min hi (max lo t)
+
+type Rgb = Rgb Int Int Int
+
+mkRgb : Int -> Int -> Int -> Rgb
+mkRgb r g b =
+  Rgb
+    (clamp 0 255 r)
+    (clamp 0 255 g)
+    (clamp 0 255 b)
+
+mkCssRgb : Rgb -> String
+mkCssRgb rgb = case rgb of
+  Rgb r g b ->
+    "rgb(" ++ toString r ++
+      ", " ++ toString g ++
+      ", " ++ toString b ++
+      ")"
 
 colors : List String
 colors =
-  [ "rgb(127, 127, 255)"
-  , "rgb(127, 255, 255)"
-  , "rgb(127, 255, 127)"
-  , "rgb(255, 255, 127)"
-  , "rgb(255, 127, 127)"
-  , "rgb(255, 127, 255)"
+  [ mkCssRgb (mkRgb 127 127 255)
+  , mkCssRgb (mkRgb 127 255 255)
+  , mkCssRgb (mkRgb 127 255 127)
+  , mkCssRgb (mkRgb 255 255 127)
+  , mkCssRgb (mkRgb 255 127 127)
+  , mkCssRgb (mkRgb 255 127 255)
   ]
 
 styleColorLv : Int -> Attribute msg
@@ -69,30 +72,60 @@ renderExpr level ex = case ex of
   Lit (LInt  n) -> text (toString n)
   Lit (LBool b) -> text (toString b)
 
+renderDeBruijn : Int -> DeBruijn -> Html msg
+renderDeBruijn level ex = case ex of
+  DVar n             -> text (toString n)
+  DApp e (DApp a b)  -> span [styleColorLv level]
+    [ renderDeBruijn level e
+    , text " ("
+    , renderDeBruijn (level+1) (DApp a b)
+    , text ")"
+    ]
+  DApp a b -> span [styleColorLv level]
+    [ renderDeBruijn level a
+    , text " "
+    , renderDeBruijn level b
+    ]
+  DLam x -> span [styleColorLv level]
+    [ text "(λ "
+    , renderDeBruijn (level+1) x
+    , text ")"
+    ]
+  DLit (LInt  n) -> text (toString n)
+  DLit (LBool b) -> text (toString b)
+
 type alias Model = {
     history : List (Step DeBruijn),
-    userInput : String
+    userInput : String,
+    showDeBruijn : Bool
 }
 
-type Msg = Submit | Input String
+type Msg =
+    Submit
+  | Input String
+  | ToggleShowDeBruijn
+  | ShowHelp
 
 initModel : Model
-initModel = { userInput = "", history = [] }
+initModel = { userInput = "", history = [], showDeBruijn = False }
 
-mkLine : Step DeBruijn -> Html msg
-mkLine ex = 
+mkLine : Step DeBruijn -> Bool -> Html msg
+mkLine ex showDeBruijn =
     let (e, prefix) = case ex of
       Intermediate e -> (e, " ... ")
       Initial e -> (e, "")
       Finished reason e -> (e, reason ++ " | ")
     in div []
     [ text prefix
-    , renderExpr 0 (toExpr [] e)
+    , if showDeBruijn then
+        renderDeBruijn 0 e
+      else
+        renderExpr 0 (toExpr [] e)
     ]
 
 welcome : List (Html msg)
 welcome =
-  [ p [] 
+  [ p []
       [ text "This is a lambda calculus interpreter. "
       , text "It takes lambda calculus expressions and beta-reduces them. "
       , text "It understands the S, K, I, and Y combinators, and iota. "
@@ -106,12 +139,6 @@ welcome =
       ]
   ]
 
-last : List a -> a
-last xs = case xs of
-  []       -> Debug.crash "rip"
-  x :: []  -> x
-  x :: s   -> last s
-
 view : Model -> Html Msg
 view model =
   div []
@@ -119,16 +146,24 @@ view model =
         (if List.isEmpty model.history then
           welcome
         else
-          [mkLine (last model.history)])
-    , input [onInput Input] []
-    , button [onClick Submit] [text "Submit"]
+          List.map (\db -> mkLine db model.showDeBruijn) model.history)
+    , div [id "form"]
+        [ input [onInput Input] []
+        , button [onClick Submit] [text "Submit"]
+        , button [onClick ShowHelp] [text "Show help"]
+        ]
+    , div [id "controls"]
+        [ input [type_ "checkbox", onClick ToggleShowDeBruijn] []
+        , text "Show expressions in De Bruijn index notation"
+        ]
     ]
 
 update : Msg -> Model -> Model
 update msg model = case msg of
-  Submit  -> { model | history = parseEval expr (model.userInput),
-                       userInput = "" }
-  Input s -> { model | userInput = s }
+  Submit             -> { model | history = parseEval expr (model.userInput) }
+  Input s            -> { model | userInput = s }
+  ToggleShowDeBruijn -> { model | showDeBruijn = not model.showDeBruijn }
+  ShowHelp           -> { model | history = [] }
 
 main : Program Never Model Msg
 main = Html.beginnerProgram
