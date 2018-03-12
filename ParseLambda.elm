@@ -52,6 +52,11 @@ parsetimes =
   succeed (fromJust <| toDeBruijn 0 Dict.empty times)
     |. keyword "times"
 
+parseiota : Parser DeBruijn
+parseiota =
+  succeed iota
+    |. keyword "iota"
+
 ltrue : Parser Lit
 ltrue =
   succeed (LBool True)
@@ -70,7 +75,8 @@ lint =
 prim : Parser Expr
 prim =
   succeed (\db -> toExpr [] db)
-    |= oneOf [scomb, kcomb, icomb, ycomb, parsepred, parseiszero, parsetimes]
+    |= oneOf [scomb, kcomb, icomb, ycomb, parsepred, parseiszero, parsetimes,
+           parseiota]
     |. spaces
 
 lit : Parser Expr
