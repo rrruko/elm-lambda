@@ -12,26 +12,26 @@ unstep ex = case ex of
   Initial e         -> e
   Finished reason e -> e
 
-evalDB : Int -> DeBruijn -> List (Step DeBruijn)
-evalDB n ex =
+evalDB : Int -> Int -> DeBruijn -> List (Step DeBruijn)
+evalDB n maxDepth ex =
   let newEx = deBruijnBeta ex in
   if equivalent ex newEx then
     [Finished "Reached normal form." ex]
-  else if n > 200 then
+  else if n >= maxDepth then
     [Finished "Ran out of time." ex]
   else if n == 0 then
-    Initial ex :: evalDB (n+1) newEx
+    Initial ex :: evalDB (n+1) maxDepth newEx
   else
-    Intermediate ex :: evalDB (n+1) newEx
+    Intermediate ex :: evalDB (n+1) maxDepth newEx
 
 parseAppend : Parser Expr -> String -> List Expr -> List Expr
 parseAppend p str hist = case run p str of
   Ok ex -> ex :: hist
   Err _ -> hist
 
-parseEval : Parser Expr -> String -> List (Step DeBruijn)
-parseEval p str = case run p str of
+parseEval : Parser Expr -> String -> Int -> List (Step DeBruijn)
+parseEval p str maxDepth = case run p str of
   Ok ex -> (case toDeBruijn 0 Dict.empty ex of
-             Just e  -> evalDB 0 e
+             Just e  -> evalDB 0 maxDepth e
              Nothing -> [Initial (DVar 666)])
   Err _ -> []

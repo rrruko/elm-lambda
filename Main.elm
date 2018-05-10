@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Html exposing (..)
-import Html.Attributes exposing (class, style, id, type_)
+import Html.Attributes exposing (class, style, id, type_, defaultValue)
 import Html.Events exposing (onClick, onInput)
 import List.Extra exposing ((!!))
 
@@ -48,74 +48,92 @@ colors =
 styleColorLv : Int -> Attribute msg
 styleColorLv l = style [("color", asColor l)]
 
-renderExpr : Int -> Expr -> Html msg
-renderExpr level ex = case ex of
-  Var name         -> text name
-  App e (App a b)  -> span [styleColorLv level]
-    [ renderExpr level e
-    , text " ("
-    , renderExpr (level+1) (App a b)
-    , text ")"
-    ]
-  App a b -> span [styleColorLv level]
-    [ renderExpr level a
-    , text " "
-    , renderExpr level b
-    ]
-  Lam n x -> span [styleColorLv level]
-    [ text "(λ"
-    , text n
-    , text " . "
-    , renderExpr (level+1) x
-    , text ")"
-    ]
-  Lit (LInt  n) -> text (toString n)
-  Lit (LBool b) -> text (toString b)
+renderExpr : Int -> Int -> Expr -> Html msg
+renderExpr maxDepth level ex =
+  if level < maxDepth then
+    case ex of
+      Var name         -> text name
+      App e (App a b)  -> span [styleColorLv level]
+        [ renderExpr maxDepth level e
+        , text " ("
+        , renderExpr maxDepth (level+1) (App a b)
+        , text ")"
+        ]
+      App a b -> span [styleColorLv level]
+        [ renderExpr maxDepth level a
+        , text " "
+        , renderExpr maxDepth level b
+        ]
+      Lam n x -> span [styleColorLv level]
+        [ text "(λ"
+        , text n
+        , text " . "
+        , renderExpr maxDepth (level+1) x
+        , text ")"
+        ]
+      Lit (LInt  n) -> text (toString n)
+      Lit (LBool b) -> text (toString b)
+  else
+    text "..."
 
-renderDeBruijn : Int -> DeBruijn -> Html msg
-renderDeBruijn level ex = case ex of
-  DVar n             -> text (toString n)
-  DApp e (DApp a b)  -> span [styleColorLv level]
-    [ renderDeBruijn level e
-    , text " ("
-    , renderDeBruijn (level+1) (DApp a b)
-    , text ")"
-    ]
-  DApp a b -> span [styleColorLv level]
-    [ renderDeBruijn level a
-    , text " "
-    , renderDeBruijn level b
-    ]
-  DLam x -> span [styleColorLv level]
-    [ text "(λ "
-    , renderDeBruijn (level+1) x
-    , text ")"
-    ]
-  DLit (LInt  n) -> text (toString n)
-  DLit (LBool b) -> text (toString b)
+renderDeBruijn : Int -> Int -> DeBruijn -> Html msg
+renderDeBruijn maxDepth level ex =
+  if level < maxDepth then
+    case ex of
+      DVar n             -> text (toString n)
+      DApp e (DApp a b)  -> span [styleColorLv level]
+        [ renderDeBruijn maxDepth level e
+        , text " ("
+        , renderDeBruijn maxDepth (level+1) (DApp a b)
+        , text ")"
+        ]
+      DApp a b -> span [styleColorLv level]
+        [ renderDeBruijn maxDepth level a
+        , text " "
+        , renderDeBruijn maxDepth level b
+        ]
+      DLam x -> span [styleColorLv level]
+        [ text "(λ "
+        , renderDeBruijn maxDepth (level+1) x
+        , text ")"
+        ]
+      DLit (LInt  n) -> text (toString n)
+      DLit (LBool b) -> text (toString b)
+  else
+    text "..."
 
 type alias Model = {
-    history : List (Step DeBruijn),
-    userInput : String,
-    showDeBruijn : Bool
+    history      : List (Step DeBruijn),
+    userInput    : String,
+    showDeBruijn : Bool,
+    maxSteps     : Int,
+    maxDepth     : Int
 }
 
 type Msg =
     Submit
   | Input String
   | ToggleShowDeBruijn
+  | SetMaxSteps Int
+  | SetMaxDepth Int
   | ShowHelp
 
 initModel : Model
-initModel = { userInput = "", history = [], showDeBruijn = False }
+initModel = {
+  history      = [],
+  userInput    = "",
+  showDeBruijn = False,
+  maxSteps     = 200,
+  maxDepth     = 15
+  }
 
-mkLine : Step DeBruijn -> Bool -> Html msg
-mkLine ex showDeBruijn =
+mkLine : Step DeBruijn -> Model -> Html msg
+mkLine ex model =
   let exprSpan =
-        if showDeBruijn then
-          renderDeBruijn 0 (unstep ex)
+        if model.showDeBruijn then
+          renderDeBruijn model.maxDepth 0 (unstep ex)
         else
-          renderExpr 0 (toExpr [] (unstep ex))
+          renderExpr model.maxDepth 0 (toExpr [] (unstep ex))
   in  case ex of
         Intermediate e -> div [] [indent exprSpan]
         Initial e -> div [] [exprSpan]
@@ -135,6 +153,7 @@ welcome =
       [ text "This is a lambda calculus interpreter. "
       , text "It takes lambda calculus expressions and beta-reduces them. "
       , text "It understands the S, K, I, and Y combinators, and iota. "
+      , text "Try one of these expressions to see how it works: "
       ]
   , ul []
       [ li [] [text "(\\x. \\y. x)"]
@@ -152,7 +171,7 @@ view model =
         (if List.isEmpty model.history then
           welcome
         else
-          List.map (\db -> mkLine db model.showDeBruijn) model.history)
+          List.map (\db -> mkLine db model) model.history)
     , div [id "form"]
         [ input [onInput Input] []
         , button [onClick Submit] [text "Submit"]
@@ -161,14 +180,28 @@ view model =
     , div [id "controls"]
         [ input [type_ "checkbox", onClick ToggleShowDeBruijn] []
         , text "Show expressions in De Bruijn index notation"
+        , br [] []
+        , input
+          [type_ "number"
+          , defaultValue (toString model.maxDepth)
+          , onInput (SetMaxDepth << Result.withDefault 0 << String.toInt)] []
+        , text "Maximum depth at which to show expressions"
+        , br [] []
+        , input
+          [type_ "number"
+          , defaultValue (toString model.maxSteps)
+          , onInput (SetMaxSteps << Result.withDefault 0 << String.toInt)] []
+        , text "Maximum evaluation steps allowed"
         ]
     ]
 
 update : Msg -> Model -> Model
 update msg model = case msg of
-  Submit             -> { model | history = parseEval expr (model.userInput) }
+  Submit             -> { model | history = parseEval expr model.userInput model.maxSteps }
   Input s            -> { model | userInput = s }
   ToggleShowDeBruijn -> { model | showDeBruijn = not model.showDeBruijn }
+  SetMaxDepth n      -> { model | maxDepth = n }
+  SetMaxSteps n      -> { model | maxSteps = n }
   ShowHelp           -> { model | history = [] }
 
 main : Program Never Model Msg
