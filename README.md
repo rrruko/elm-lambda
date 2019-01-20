@@ -1,1 +1,1 @@
-Hosted at [http://atan.space/lambda-calc/index.html](http://atan.space/lambda-calc/index.html)
+Hosted at [https://atan.space/lambda-calc/interpreter.html](https://atan.space/lambda-calc/interpreter.html)
